@@ -49,7 +49,6 @@ function httpUserRequest( userRequest, userResponse ) {
         'port': hostport[1],
         'method': userRequest.method,
         'path': path,
-        'agent': userRequest.agent,
         'auth': userRequest.auth,
         'headers': userRequest.headers
     };
@@ -106,7 +105,34 @@ function httpUserRequest( userRequest, userResponse ) {
                     }
 
                     var latencyInMs = firstServerResponseTime - userRequestTime;
-                    console.log('summary' + ';' + options.host + ';' + options.method + ';' + userRequest.connection.remoteAddress +';' + latencyInMs +';' + sizeInBytes);
+                    if(latencyInMs != null || sizeInBytes != 0) {
+                        console.log('summary' + ';' + options.host + ';' + options.method + ';' + userRequest.connection.remoteAddress + ';' + latencyInMs + ';' + sizeInBytes);
+
+                        var sub_url = options.path;
+                        var regResult = /(.*)(\?)(.*)/.exec( options.path );
+                        if ( regResult ) {
+                            if ( regResult[1].length > 0 ) {
+                                sub_url = regResult[1];
+                            } else {
+                                sub_url = "/";
+                            }
+                        }
+
+                        var msg = {
+                            domain: options.host,
+                            httpVerb: options.method,
+                            clientIp: userRequest.connection.remoteAddress,
+                            latencyMs: latencyInMs,
+                            payloadBytes: sizeInBytes,
+                            agent: options.headers['user-agent'],
+                            path: sub_url
+                        }
+
+                        var msgStr = JSON.stringify(msg);
+                        console.log('Json obj : ' + msgStr)
+                        postMsgToElasticSearch(msgStr);
+                    }
+
                     userResponse.end();
                 }
             );
@@ -142,6 +168,45 @@ function httpUserRequest( userRequest, userResponse ) {
             proxyRequest.end();
         }
     );
+}
+
+function postMsgToElasticSearch(content){
+    var headers = {
+        'Content-Type': 'application/json',
+        'Content-Length': content.length
+    };
+
+    var options = {
+        host: 'baudscope.cloudapp.net',
+        port: 9200,
+        path: '/proxy_http_traffic/v2',
+        method: 'POST',
+        headers: headers
+    };
+
+    var req = http.request(options, function(res) {
+        res.setEncoding('utf-8');
+
+        var responseString = '';
+
+        console.log('start to post to elastic search ' + options.host);
+
+        res.on('data', function(data) {
+            responseString += data;
+        });
+
+        res.on('end', function() {
+            var resultObject = JSON.parse(responseString);
+            console.log('finish to post to elastic search ' + options.host);
+        });
+    });
+
+    req.on('error', function(e) {
+        console.log('fail to post data to ' + options.host + options.path + ', error msg is ' + e);
+    });
+
+    req.write(content);
+    req.end();
 }
 
 function main() {
