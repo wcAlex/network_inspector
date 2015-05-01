@@ -4,10 +4,35 @@
 
 var http = require('http');
 var net = require('net');
+var os = require('os');
 
 var debugging = 0;
 
-var regex_hostport = /^([^:]+)(:([0-9]+))?$/;
+var regex_hostport = /^([^:]+)(:([0-9]+))?$/
+
+var localIpAddresses = '';
+function CalculateLocalIpAddress() {
+    var ifaces = os.networkInterfaces();
+
+    Object.keys(ifaces).forEach(function (ifname) {
+        var alias = 0;
+
+        ifaces[ifname].forEach(function (iface) {
+            if ('IPv4' !== iface.family || iface.internal !== false) {
+                // skip over internal (i.e. 127.0.0.1) and non-ipv4 addresses
+                return;
+            }
+
+            if (alias >= 1) {
+                // this single interface has multiple ipv4 addresses
+                localIpAddresses += ifname + ':' + alias +','+iface.address;
+            } else {
+                // this interface has only one ipv4 adress
+                localIpAddresses = ifname + ','+iface.address;
+            }
+        });
+    });
+}
 
 function getHostPortFromString( hostString, defaultPort ) {
     var host = hostString;
@@ -22,6 +47,26 @@ function getHostPortFromString( hostString, defaultPort ) {
     }
 
     return( [ host, port ] );
+}
+
+function getSubPathFromUrl(url){
+    var sub_url = url;
+    var regResult = /(.*)(\?)(.*)/.exec( url );
+    if ( regResult ) {
+        if ( regResult[1].length > 0 ) {
+            var lastC = regResult[1].lastIndexOf('/');
+            if(lastC > 0) {
+                sub_url = regResult[1].substr(0, lastC);
+            }
+            else{
+                sub_url = regResult[1];
+            }
+        } else {
+            sub_url = "/";
+        }
+    }
+
+    return sub_url;
 }
 
 // handle a HTTP proxy request
@@ -106,27 +151,26 @@ function httpUserRequest( userRequest, userResponse ) {
 
                     var latencyInMs = firstServerResponseTime - userRequestTime;
                     if(latencyInMs != null || sizeInBytes != 0) {
-                        console.log('summary' + ';' + options.host + ';' + options.method + ';' + userRequest.connection.remoteAddress + ';' + latencyInMs + ';' + sizeInBytes);
+                        //console.log('summary' + ';' + options.host + ';' + options.method + ';' + userRequest.connection.remoteAddress + ';' + latencyInMs + ';' + sizeInBytes);
 
-                        var sub_url = options.path;
+                        var sub_url = getSubPathFromUrl(options.path);
                         var regResult = /(.*)(\?)(.*)/.exec( options.path );
-                        if ( regResult ) {
-                            if ( regResult[1].length > 0 ) {
-                                sub_url = regResult[1];
-                            } else {
-                                sub_url = "/";
-                            }
-                        }
 
                         var msg = {
                             domain: options.host,
                             httpVerb: options.method,
                             clientIp: userRequest.connection.remoteAddress,
+                            proxyIp: localIpAddresses,
                             latencyMs: latencyInMs,
                             payloadBytes: sizeInBytes,
                             agent: options.headers['user-agent'],
+                            contentType: proxyResponse.headers['content-type'],
+                            statusCode: proxyResponse.statusCode,
+                            message: 'OK',
                             path: sub_url
                         }
+
+                        // Destination Ip ???
 
                         var msgStr = JSON.stringify(msg);
                         console.log('Json obj : ' + msgStr)
@@ -148,6 +192,23 @@ function httpUserRequest( userRequest, userResponse ) {
                 "<p>Error was <pre>" + error + "</pre></p>\r\n" +
                 "</body></html>\r\n"
             );
+
+            var msg = {
+                domain: options.host,
+                httpVerb: options.method,
+                clientIp: userRequest.connection.remoteAddress,
+                proxyIp: localIpAddresses,
+                agent: options.headers['user-agent'],
+                contentType: userRequest.headers['accept'],
+                statusCode: error.statusCode,
+                message: error.message,
+                path: getSubPathFromUrl(options.path)
+            };
+
+            var msgStr = JSON.stringify(msg);
+            console.log('Json obj : ' + msgStr)
+            postMsgToElasticSearch(msgStr);
+
             userResponse.end();
         }
     );
@@ -211,6 +272,8 @@ function postMsgToElasticSearch(content){
 
 function main() {
     var port = 5555; // default port if none on command line
+
+    CalculateLocalIpAddress();
 
     // check for any command line arguments
     for ( var argn = 2; argn < process.argv.length; argn++ ) {
