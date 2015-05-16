@@ -1,0 +1,10 @@
+npm install azure-storage
+sudo apt-get install traceroute
+
+# below packages are for testing
+npm install -g mocha
+npm install should
+
+
+to do:
+1. add bdstatic.com for baidu

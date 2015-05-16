@@ -5,12 +5,16 @@
 var http = require('http');
 var net = require('net');
 var os = require('os');
+var watchlist = require('./domain_watch_list');
+var probe = require('./traffic_probe');
 
 var debugging = 0;
 
-var regex_hostport = /^([^:]+)(:([0-9]+))?$/
+var regex_hostport = /^([^:]+)(:([0-9]+))?$/;
 
-var localIpAddresses = '';
+var shared_global_objects = {};
+shared_global_objects.localIpAddresses = '';
+
 function CalculateLocalIpAddress() {
     var ifaces = os.networkInterfaces();
 
@@ -25,10 +29,10 @@ function CalculateLocalIpAddress() {
 
             if (alias >= 1) {
                 // this single interface has multiple ipv4 addresses
-                localIpAddresses += ifname + ':' + alias +','+iface.address;
+                shared_global_objects.localIpAddresses += ifname + ':' + alias +','+iface.address;
             } else {
                 // this interface has only one ipv4 adress
-                localIpAddresses = ifname + ','+iface.address;
+                shared_global_objects.localIpAddresses = ifname + ','+iface.address;
             }
         });
     });
@@ -69,24 +73,37 @@ function getSubPathFromUrl(url){
     return sub_url;
 }
 
+function getPathFromUrl(url) {
+    var result = /^[a-zA-Z]+:\/\/[^\/]+(\/.*)?$/.exec(url);
+    if (result) {
+        if (result[1].length > 0) {
+            return result[1];
+        } else {
+            return "/";
+        }
+    }
+
+    return "/";
+}
+
 // handle a HTTP proxy request
 function httpUserRequest( userRequest, userResponse ) {
     if ( debugging ) {
         console.log( '  > request: %s', userRequest.url );
     }
 
-    var httpVersion = userRequest['httpVersion'];
     var hostport = getHostPortFromString( userRequest.headers['host'], 80 );
 
     // have to extract the path from the requested URL
-    var path = userRequest.url;
-    result = /^[a-zA-Z]+:\/\/[^\/]+(\/.*)?$/.exec( userRequest.url );
-    if ( result ) {
-        if ( result[1].length > 0 ) {
-            path = result[1];
-        } else {
-            path = "/";
-        }
+    var path = getPathFromUrl( userRequest.url );
+    var b_onList = watchlist.IsDomainInWatchList(hostport[0], watchlist.GetDomainRegexWatchList(), function(error, domain_match_list, domain_unmatch_list) {
+        console.log("matched domain list: " + JSON.stringify(domain_match_list));
+        console.log("unmatched domain list: " + JSON.stringify(domain_unmatch_list));
+    });
+    //var b_onList = true;
+
+    if ( debugging ){
+        console.log('host %s is %s the watchlist', hostport[0], b_onList ? 'on' : 'not on');
     }
 
     var options = {
@@ -128,14 +145,14 @@ function httpUserRequest( userRequest, userResponse ) {
                         console.log('  < chunk = %d bytes', chunk.length);
                     }
 
-                    sizeInBytes = sizeInBytes + chunk.length;
+                    sizeInBytes += chunk.length;
 
-                    if(firstServerResponseTime == undefined) {
+                    if(b_onList && firstServerResponseTime == undefined) {
                         firstServerResponseTime = (new Date()).getTime();
-                    }
 
-                    if(debugging){
-                        console.log(' < data : ' + firstServerResponseTime.toString());
+                        if (debugging){
+                            console.log(' < data : ' + firstServerResponseTime.toString());
+                        }
                     }
 
                     userResponse.write( chunk );
@@ -149,32 +166,34 @@ function httpUserRequest( userRequest, userResponse ) {
                         console.log( '  < END' );
                     }
 
-                    var latencyInMs = firstServerResponseTime - userRequestTime;
-                    if(latencyInMs != null || sizeInBytes != 0) {
-                        //console.log('summary' + ';' + options.host + ';' + options.method + ';' + userRequest.connection.remoteAddress + ';' + latencyInMs + ';' + sizeInBytes);
+                    if(b_onList) {
+                        var latencyInMs = firstServerResponseTime - userRequestTime;
+                        if (latencyInMs != null || sizeInBytes != 0) {
+                            //console.log('summary' + ';' + options.host + ';' + options.method + ';' + userRequest.connection.remoteAddress + ';' + latencyInMs + ';' + sizeInBytes);
 
-                        var sub_url = getSubPathFromUrl(options.path);
-                        var regResult = /(.*)(\?)(.*)/.exec( options.path );
+                            var sub_url = getSubPathFromUrl(options.path);
 
-                        var msg = {
-                            domain: options.host,
-                            httpVerb: options.method,
-                            clientIp: userRequest.connection.remoteAddress,
-                            proxyIp: localIpAddresses,
-                            latencyMs: latencyInMs,
-                            payloadBytes: sizeInBytes,
-                            agent: options.headers['user-agent'],
-                            contentType: proxyResponse.headers['content-type'],
-                            statusCode: proxyResponse.statusCode,
-                            message: 'OK',
-                            path: sub_url
+                            var msg = {
+                                domain: options.host,
+                                httpVerb: options.method,
+                                clientIp: userRequest.connection.remoteAddress,
+                                proxyIp: shared_global_objects.localIpAddresses,
+                                latencyMs: latencyInMs,
+                                payloadBytes: sizeInBytes,
+                                agent: options.headers['user-agent'],
+                                contentType: proxyResponse.headers['content-type'],
+                                statusCode: proxyResponse.statusCode,
+                                message: 'OK',
+                                path: sub_url
+                            };
+
+                            var msgStr = JSON.stringify(msg);
+                            if(debugging) {
+                                console.log('Json obj : ' + msgStr);
+                            }
+
+                            postMsgToElasticSearch(msgStr);
                         }
-
-                        // Destination Ip ???
-
-                        var msgStr = JSON.stringify(msg);
-                        console.log('Json obj : ' + msgStr)
-                        postMsgToElasticSearch(msgStr);
                     }
 
                     userResponse.end();
@@ -193,21 +212,26 @@ function httpUserRequest( userRequest, userResponse ) {
                 "</body></html>\r\n"
             );
 
-            var msg = {
-                domain: options.host,
-                httpVerb: options.method,
-                clientIp: userRequest.connection.remoteAddress,
-                proxyIp: localIpAddresses,
-                agent: options.headers['user-agent'],
-                contentType: userRequest.headers['accept'],
-                statusCode: error.statusCode,
-                message: error.message,
-                path: getSubPathFromUrl(options.path)
-            };
+            if(b_onList) {
+                var msg = {
+                    domain: options.host,
+                    httpVerb: options.method,
+                    clientIp: userRequest.connection.remoteAddress,
+                    proxyIp: shared_global_objects.localIpAddresses,
+                    agent: options.headers['user-agent'],
+                    contentType: userRequest.headers['accept'],
+                    statusCode: error.statusCode,
+                    message: error.message,
+                    path: getSubPathFromUrl(options.path)
+                };
 
-            var msgStr = JSON.stringify(msg);
-            console.log('Json obj : ' + msgStr)
-            postMsgToElasticSearch(msgStr);
+                var msgStr = JSON.stringify(msg);
+                if(debugging) {
+                    console.log('Json obj : ' + msgStr);
+                }
+
+                postMsgToElasticSearch(msgStr);
+            }
 
             userResponse.end();
         }
@@ -257,7 +281,6 @@ function postMsgToElasticSearch(content){
         });
 
         res.on('end', function() {
-            var resultObject = JSON.parse(responseString);
             console.log('finish to post to elastic search ' + options.host);
         });
     });
@@ -285,13 +308,22 @@ function main() {
 
         if ( process.argv[argn] === '-d' ) {
             debugging = 1;
-            continue;
         }
     }
 
     if ( debugging ) {
         console.log( 'server listening on port ' + port );
     }
+
+    if ( debugging ) {
+        console.log('start to initialize watchlist');
+    }
+    watchlist.Initialize();
+
+    if ( debugging ) {
+        console.log('start to initialize probe object');
+    }
+    probe.Initialize();
 
     // start HTTP server with custom request handler callback function
     var server = http.createServer( httpUserRequest ).listen(port);

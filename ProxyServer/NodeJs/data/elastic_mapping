@@ -1,0 +1,155 @@
+// ---  Ping result
+
+GET _search
+{
+   "query": {
+      "match_all": {}
+   }
+}
+
+PUT /proxy_http_traffic
+
+PUT /proxy_http_traffic/v2/_mapping
+{
+    "v2":
+    {
+        "_ttl": {
+            "enabled": true
+        },
+        "_timestamp": {
+            "enabled": true,
+            "store": "yes"
+        },
+        "properties": {
+            "domain":  {
+                "type": "string",
+                "store": "yes"
+            },
+            "httpVerb":{
+                "type": "string",
+                "store": "yes"
+            },
+            "clientIp":  {
+                "type": "string",
+                "store": "yes"
+            },
+            "latencyMs":  {
+                "type": "integer",
+                "store": "yes"
+            },
+            "payloadBytes":  {
+                "type": "integer",
+                "store": "yes"
+            },
+            "agent":  {
+                "type": "string",
+                "store": "yes"
+            },
+            "contentType":  {
+                "type": "string",
+                "store": "yes"
+            },
+            "statusCode": {
+                "type": "integer",
+                "store": "yes"
+            },
+            "message":  {
+                "type": "string",
+                "store": "yes"
+            },
+            "path":  {
+                "type": "string",
+                "store": "yes"
+            }
+        }
+    }
+}
+
+PUT /proxy_http_traffic/probe/_mapping
+{
+    "probe":
+    {
+        "_ttl":{
+            "enabled": true
+        },
+        "_timestamp":{
+            "enabled": true,
+            "store": "yes"
+        },
+        "properties": {
+            "domain" :{
+                "type": "string",
+                "store": "yes"
+            },
+            "ipAddress" :{
+                "type": "string",
+                "store": "yes"
+            },
+            "result":{
+                "type": "boolean",
+                "store": "yes"
+            } ,
+            "sentPackets":{
+                "type": "integer",
+                "store": "yes"
+            },
+            "receivedPackets": {
+                "type": "integer",
+                "store": "yes"
+            },
+            "packetLostRateInPercent":{
+                "type": "double",
+                "store": "yes"
+            },
+            "totalTimeInMs": {
+                "type": "double",
+                "store": "yes"
+            },
+            "rttMinInMs":{
+                "type": "double",
+                "store": "yes"
+            },
+            "rttAvgInMs":{
+                "type": "double",
+                "store": "yes"
+            },
+            "rttMaxInMs": {
+                "type": "double",
+                "store": "yes"
+            },
+            "rttMdevInMs": {
+                "type": "double",
+                "store": "yes"
+            }
+        }
+    }
+}
+
+
+PUT /proxy_http_traffic/route/_mapping
+{
+    "route":
+    {
+        "_ttl":{
+            "enabled": true
+        },
+        "_timestamp":{
+            "enabled": true,
+            "store": "yes"
+        },
+        "properties": {
+            "domain" :{
+                "type": "string",
+                "store": "yes"
+            },
+            "ipAddress" :{
+                "type": "string",
+                "store": "yes"
+            },
+            "hops" :{
+                "type": "string",
+                "store": "yes"
+            }
+        }
+    }
+}
